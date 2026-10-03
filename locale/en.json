@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Quota Ring (dsh-quota-ring)",
+    "description": "Daily / weekly / monthly spend quotas as a small ring in the composer status line. Prices sessions with the official DeepSeek CNY peak/off-peak table, including the Chinese public-holiday and weekend all-off-peak rules."
+  }
+}

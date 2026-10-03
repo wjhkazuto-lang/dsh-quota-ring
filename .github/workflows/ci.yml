@@ -1,0 +1,26 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.15 is the floor for folding DSH's zstd session logs.
+        node: ['22.15', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dev dependencies
+        run: npm install --no-audit --no-fund
+      - name: Syntax check both halves
+        run: npm run check
+      - name: Run the suites
+        run: npm test

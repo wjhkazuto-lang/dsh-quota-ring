@@ -1,0 +1,117 @@
+# dsh-quota-ring bundle patch: one Host row, inserted over the Web/Desktop profile.
+#
+# Everything here is the ADVANCED configuration. The three day/week/month limits
+# also live on the plugin's Settings -> 额度 page, and a value saved there wins
+# over the default below (the settings page is the runtime source of truth).
+#
+# Notes on the fields that matter:
+#
+#   dayLimit/weekLimit/monthLimit
+#       Seed values in CNY, only applied on the very first run. 0 disables a
+#       period. After that, edit them in Settings -> 额度.
+#
+#   thresholds
+#       Ratios at which the ring changes colour. warn -> yellow, danger -> red.
+#
+#   peakEnabled / peakWindows
+#       Peak windows are UTC hours, half-open [start, end):
+#         {start: 1, end: 4}  == Beijing 09:00-12:00
+#         {start: 6, end: 10} == Beijing 14:00-18:00
+#       They only ever apply on a Beijing weekday, because weekends and holidays
+#       short-circuit to all-day off-peak. Off-peak is exactly half of peak, per
+#       the official rule.
+#
+#   holidays
+#       Chinese public holidays as Beijing calendar days (国办发明电〔2025〕7号).
+#       ONLY days off are listed: 调休补班日 all fall on a weekend, and weekends
+#       are already all-day off-peak, so they need no entry. This is the one
+#       thing that needs a yearly update -- when the 国务院办公厅 publishes the
+#       next year's arrangement (usually in November), append its dates here.
+#       The plugin logs a warning at startup while the current year is missing.
+#
+#   prices
+#       Official DeepSeek CNY prices per 1M tokens, keyed by model id. `peak` is
+#       the reference price and `offPeak` is half of it. Unlisted model ids fall
+#       back to the Flash row rather than dropping the request from the total.
+#
+#   backfillDays
+#       How much history is folded from session logs at startup, so the ring is
+#       meaningful immediately after installation instead of starting at zero.
+#
+#   retentionDays
+#       How long per-day buckets are kept before pruning.
+#
+#   refreshSeconds
+#       How often the browser half re-reads the Host state.
+
+- insert:
+    - id: quota-ring
+      name: dsh-quota-ring
+      config:
+        dayLimit: 10
+        weekLimit: 50
+        monthLimit: 200
+        thresholds:
+          warn: 0.6
+          danger: 0.9
+        peakEnabled: true
+        peakWindows:
+          - { start: 1, end: 4 }
+          - { start: 6, end: 10 }
+        holidays:
+          # 元旦
+          - '2026-01-01'
+          - '2026-01-02'
+          - '2026-01-03'
+          # 春节
+          - '2026-02-15'
+          - '2026-02-16'
+          - '2026-02-17'
+          - '2026-02-18'
+          - '2026-02-19'
+          - '2026-02-20'
+          - '2026-02-21'
+          - '2026-02-22'
+          - '2026-02-23'
+          # 清明
+          - '2026-04-04'
+          - '2026-04-05'
+          - '2026-04-06'
+          # 劳动节
+          - '2026-05-01'
+          - '2026-05-02'
+          - '2026-05-03'
+          - '2026-05-04'
+          - '2026-05-05'
+          # 端午
+          - '2026-06-19'
+          - '2026-06-20'
+          - '2026-06-21'
+          # 中秋
+          - '2026-09-25'
+          - '2026-09-26'
+          - '2026-09-27'
+          # 国庆
+          - '2026-10-01'
+          - '2026-10-02'
+          - '2026-10-03'
+          - '2026-10-04'
+          - '2026-10-05'
+          - '2026-10-06'
+          - '2026-10-07'
+        prices:
+          deepseek-v4-flash:
+            peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 }
+            offPeak: { cacheHit: 0.02, cacheMiss: 1, output: 4 }
+          deepseek-v4-pro:
+            peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 }
+            offPeak: { cacheHit: 0.02, cacheMiss: 1, output: 4 }
+          deepseek-v4-flash-vision-exp:
+            peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 }
+            offPeak: { cacheHit: 0.02, cacheMiss: 1, output: 4 }
+          deepseek-v4.1-flash:
+            peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 }
+            offPeak: { cacheHit: 0.02, cacheMiss: 1, output: 4 }
+        backfillDays: 35
+        retentionDays: 400
+        refreshSeconds: 30

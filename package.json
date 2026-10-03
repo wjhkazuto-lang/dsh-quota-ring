@@ -1,0 +1,104 @@
+{
+  "name": "dsh-quota-ring",
+  "version": "0.1.0",
+  "description": "额度环：在输入框下方的状态行显示日/周/月额度进度环，按官方人民币峰谷价目表计费（含中国法定节假日与周末全天谷价）。Quota ring: daily/weekly/monthly spend quotas in the composer status line, priced with the official DeepSeek CNY peak/off-peak table.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "icon": "icon.svg",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./client.js"
+    },
+    "./quota": {
+      "default": "./lib/quota.mjs"
+    },
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "dshhub": {
+    "schemaVersion": 1,
+    "displayName": "dsh-quota-ring",
+    "summary": "在输入框下方状态行显示日/周/月额度进度环，按官方人民币峰谷价目表计费（含中国法定节假日与周末全天谷价）。Daily/weekly/monthly quota ring in the composer status line, priced with the official DeepSeek CNY peak/off-peak table.",
+    "categories": [
+      "费用",
+      "用量统计",
+      "Web UI"
+    ],
+    "surfaces": [
+      "host",
+      "web"
+    ],
+    "capabilities": {
+      "provides": []
+    },
+    "compatibility": {
+      "dsh": ">=0.2.0-rc.1",
+      "node": ">=22.15"
+    },
+    "permissions": {
+      "network": []
+    }
+  },
+  "files": [
+    "lib",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale",
+    "README.md",
+    "preview.png"
+  ],
+  "scripts": {
+    "check": "node --check client.js && node --check lib/index.js",
+    "test": "node test/check.mjs && node test/smoke.mjs && node test/render-check.mjs",
+    "test:logic": "node test/check.mjs",
+    "test:host": "node test/smoke.mjs",
+    "test:render": "node test/render-check.mjs",
+    "preview": "node test/preview.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek",
+    "deepseek-harness",
+    "quota",
+    "budget",
+    "cost",
+    "peak-off-peak"
+  ],
+  "author": "翌yi (https://github.com/wjhkazuto-lang)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wjhkazuto-lang/dsh-quota-ring.git"
+  },
+  "homepage": "https://github.com/wjhkazuto-lang/dsh-quota-ring#readme",
+  "bugs": {
+    "url": "https://github.com/wjhkazuto-lang/dsh-quota-ring/issues"
+  },
+  "engines": {
+    "node": ">=22.15"
+  },
+  "devDependencies": {
+    "yaml": "^2.9.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
