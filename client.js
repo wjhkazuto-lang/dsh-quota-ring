@@ -459,8 +459,13 @@ window.__ModuleLoader__.load({
         failed: t.balanceFailed,
       }
       if (official.status !== 'ready') {
+        // Carry the Host's reason through to the panel: "service missing",
+        // "signed out" and "query failed" otherwise look identical, and the
+        // next diagnosis then starts from zero.
+        const detail = typeof official.error === 'string' && official.error.trim() ? official.error.trim() : null
         return [
           h('div', { className: 'qr-line' }, h('span', null, t.balance), h('b', null, reasons[official.status] ?? t.balanceLoading)),
+          ...(detail === null ? [] : [h('div', { className: 'qr-note' }, detail)]),
         ]
       }
       const symbol = official.currency === 'USD' ? '$' : '¥'

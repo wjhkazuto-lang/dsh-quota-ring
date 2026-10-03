@@ -522,6 +522,22 @@ check('every non-ready balance state explains itself instead of going blank', ()
   }
 })
 
+check('a non-ready state carries the Host reason into the panel', () => {
+  const state = fixtureState()
+  state.official = { reconcile: true, status: 'unavailable', at: Date.now(), error: '当前构建没有 deepseekAccount 服务' }
+  const body = text(renderComponent(badge, { store: makeStore(state) }))
+  assert.ok(body.includes('账号服务不可用'), 'the short label should render')
+  assert.ok(body.includes('没有 deepseekAccount'), `the reason should render, got ${body}`)
+})
+
+check('a non-ready state without a reason renders no empty note', () => {
+  const state = fixtureState()
+  state.official = { reconcile: true, status: 'signed-out', at: Date.now() }
+  const tree = renderComponent(badge, { store: makeStore(state) })
+  const notes = findAll(tree, (n) => n.props?.className === 'qr-note')
+  assert.equal(notes.length, 0, 'no reason means no note row')
+})
+
 check('a USD wallet is not rendered with a ¥ sign', () => {
   const state = fixtureState()
   state.official = { ...state.official, currency: 'USD', total: 3.5, day: { ...state.official.day, currency: 'USD', spend: 0.5 } }

@@ -49,6 +49,11 @@
 #       a completely offline plugin. Refresh is deliberately slow: the platform
 #       balance is not a per-second number.
 #
+#   balanceRetrySeconds
+#       How soon a state request may nudge a retry after a failed balance read.
+#       Without it a single transient failure would pin the panel for a full
+#       refresh interval.
+#
 #   refreshSeconds
 #       How often the browser half re-reads the Host state.
 
@@ -124,4 +129,5 @@
         retentionDays: 400
         balanceReconcile: true
         balanceRefreshMinutes: 5
+        balanceRetrySeconds: 30
         refreshSeconds: 30

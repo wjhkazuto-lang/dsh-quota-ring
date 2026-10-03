@@ -813,18 +813,92 @@ await check('a top-up produces a negative delta the UI can label', async () => {
 
 await check('signed-out, missing service and a throwing query each report why', async () => {
   const cases = [
-    [{ account: fakeAccount({ signedIn: false }) }, 'signed-out'],
-    [{ account: undefined }, 'unavailable'],
-    [{ account: fakeAccount({ balanceThrows: true }) }, 'failed'],
+    [{ account: fakeAccount({ signedIn: false }) }, 'signed-out', null],
+    [{ account: undefined }, 'unavailable', '没有 deepseekAccount'],
+    [{ account: fakeAccount({ balanceThrows: true }) }, 'failed', '已重试 3 次'],
   ]
-  for (const [opts, expected] of cases) {
+  for (const [opts, expected, reasonNeedle] of cases) {
     const { run, dir, state } = await bootWithAccount(opts)
     try {
       assert.equal(state.official.status, expected, `${JSON.stringify(expected)} expected, got ${state.official.status}`)
+      // The four failure modes must be distinguishable, not just "not ready".
+      if (reasonNeedle !== null) {
+        assert.ok(
+          typeof state.official.error === 'string' && state.official.error.includes(reasonNeedle),
+          `status ${expected} should carry a reason containing "${reasonNeedle}", got ${state.official.error}`,
+        )
+      }
     } finally {
       run.dispose()
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  }
+})
+
+await check('a flaky balance query is retried instead of failing on the first throw', async () => {
+  let calls = 0
+  const flaky = {
+    async getState() {
+      return { status: 'credential-stored', links: {} }
+    },
+    async getBalance() {
+      calls += 1
+      if (calls < 3) throw new Error('SELF_SIGNED_CERT_IN_CHAIN')
+      return { status: 'ready', value: [{ currency: 'CNY', balance: '42.5' }], bonusWallets: [] }
+    },
+  }
+  const { run, dir, state } = await bootWithAccount({ account: flaky })
+  try {
+    assert.equal(state.official.status, 'ready', `two failures then success must still succeed, got ${state.official.status}`)
+    assert.equal(calls, 3, `expected 3 attempts, saw ${calls}`)
+    assert.ok(Math.abs(state.official.total - 42.5) < 1e-9)
+  } finally {
+    run.dispose()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('a non-ready read is retried on the next state request', async () => {
+  // The account service can be invisible at apply() time; without the retry the
+  // panel would show "unavailable" until the slow periodic timer came round.
+  let healthy = false
+  let calls = 0
+  const delayed = {
+    async getState() {
+      return { status: 'credential-stored', links: {} }
+    },
+    async getBalance() {
+      calls += 1
+      if (!healthy) throw new Error('not ready yet')
+      return { status: 'ready', value: [{ currency: 'CNY', balance: '7' }], bonusWallets: [] }
+    },
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-ring-heal-'))
+  try {
+    // A 1s retry window keeps the test fast; the shipped default is 30s.
+    const run = boot({ dir, account: delayed, config: { ...effective, balanceRetrySeconds: 1 } })
+    await run.ready()
+    for (let i = 0; i < 60; i += 1) {
+      if ((await run.state()).official.status !== 'loading') break
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    const failed = (await run.state()).official
+    assert.notEqual(failed.status, 'ready', 'the first read must fail while the service is unhealthy')
+    const callsAfterFailure = calls
+
+    healthy = true
+    await new Promise((r) => setTimeout(r, 1300))
+    let healed = (await run.state()).official
+    for (let i = 0; i < 40 && healed.status !== 'ready'; i += 1) {
+      await new Promise((r) => setTimeout(r, 150))
+      healed = (await run.state()).official
+    }
+    assert.equal(healed.status, 'ready', `a state request should have healed the read, got ${healed.status}`)
+    assert.ok(calls > callsAfterFailure, 'the healed read must have actually re-queried')
+    assert.ok(Math.abs(healed.total - 7) < 1e-9)
+    run.dispose()
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
