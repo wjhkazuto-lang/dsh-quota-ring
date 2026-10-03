@@ -32,6 +32,17 @@ window.__ModuleLoader__.load({
         over: '已超额',
         today: '今日',
         cacheHit: '缓存命中',
+        balance: '官方余额',
+        balanceAccountScope: '账号级',
+        balanceToday: '本日减少',
+        balanceSince: (time) => `减少量自 ${time} 起算`,
+        balanceLoading: '读取中…',
+        balanceDisabled: '已在行配置关闭对账',
+        balanceSignedOut: '未登录，读不到余额',
+        balanceUnavailable: '账号服务不可用',
+        balanceFailed: '余额查询失败',
+        balanceToppedUp: '本日有充值',
+        scopeNote: '额度按本机 DSH 会话计；官方余额是账号级，含其他设备与工具',
         phasePeak: '当前 峰价',
         phaseOff: '当前 谷价',
         reasonHoliday: '法定节假日',
@@ -65,6 +76,17 @@ window.__ModuleLoader__.load({
         over: 'over',
         today: 'Today',
         cacheHit: 'cache hit',
+        balance: 'Balance',
+        balanceAccountScope: 'account-wide',
+        balanceToday: 'spent today',
+        balanceSince: (time) => `decrease measured from ${time}`,
+        balanceLoading: 'reading…',
+        balanceDisabled: 'reconciliation off in row config',
+        balanceSignedOut: 'not signed in',
+        balanceUnavailable: 'account service unavailable',
+        balanceFailed: 'balance query failed',
+        balanceToppedUp: 'topped up today',
+        scopeNote: 'Quotas count this machine\'s DSH sessions; the official balance is account-wide',
         phasePeak: 'Peak price',
         phaseOff: 'Off-peak price',
         reasonHoliday: 'public holiday',
@@ -121,6 +143,14 @@ window.__ModuleLoader__.load({
       if (d > 0) return `${d}d${hh}h`
       if (hh > 0) return `${hh}h${String(mm).padStart(2, '0')}m`
       return `${mm}m`
+    }
+
+    function clockTime(ms) {
+      try {
+        return new Date(Number(ms)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      } catch {
+        return '—'
+      }
     }
 
     function percent(ratio) {
@@ -188,7 +218,9 @@ window.__ModuleLoader__.load({
 .qr-row-reset{grid-column:2 / -1;font-size:11px;color:var(--dsw-alias-label-secondary,#9ca3af);margin-top:-2px}
 .qr-sep{height:1px;background:var(--dsw-alias-border-l1,rgba(0,0,0,.06));margin:9px 0}
 .qr-line{font-size:11px;color:var(--dsw-alias-label-secondary,#6b7280);line-height:1.65;display:flex;justify-content:space-between;gap:10px}
-.qr-line b{font-weight:600;color:var(--dsw-alias-label-primary,#1a1a1a);font-variant-numeric:tabular-nums}
+.qr-line span{min-width:0}
+.qr-line b{font-weight:600;color:var(--dsw-alias-label-primary,#1a1a1a);font-variant-numeric:tabular-nums;white-space:nowrap}
+.qr-note{font-size:10px;line-height:1.5;margin-top:5px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#8b8b93))}
 .qr-warn{font-size:11px;line-height:1.5;margin-top:6px;color:var(--dsw-alias-state-warn-primary,#b45309)}
 .qr-err{font-size:11px;line-height:1.5;margin-top:6px;color:var(--dsw-alias-state-error-primary,#b91c1c)}
 .qr-settings{display:flex;flex-direction:column;gap:14px;max-width:520px}
@@ -389,6 +421,7 @@ window.__ModuleLoader__.load({
               h('b', null, `${compact(state.today.totalTokens)} tok · ${t.cacheHit} ${cacheHitPct}`),
             ),
             h('div', { className: 'qr-line' }, h('span', null, '峰谷'), h('b', null, `${phaseText} · ${reasonKey}`)),
+            ...balanceRows(state.official, t),
             ...rows
               .filter(([, , entry]) => entry.over > 0)
               .map(([key, name, entry]) =>
@@ -400,6 +433,54 @@ window.__ModuleLoader__.load({
           ),
         ),
       )
+    }
+
+    /**
+     * The reconciliation rows.
+     *
+     * The machine-scope quota and the account-scope balance legitimately differ
+     * (other devices, other tools, and the billed calls DSH records no usage for),
+     * so both are shown with their scope stated rather than a single number that
+     * would look wrong against the platform's usage page.
+     *
+     * @param official - the Host's `official` state slice.
+     * @param t - active dictionary.
+     * @returns an array of panel rows (possibly with a trailing explanatory note).
+     */
+    function balanceRows(official, t) {
+      if (!official || official.reconcile === false) {
+        return [h('div', { className: 'qr-line' }, h('span', null, t.balance), h('b', null, t.balanceDisabled))]
+      }
+      const reasons = {
+        loading: t.balanceLoading,
+        disabled: t.balanceDisabled,
+        'signed-out': t.balanceSignedOut,
+        unavailable: t.balanceUnavailable,
+        failed: t.balanceFailed,
+      }
+      if (official.status !== 'ready') {
+        return [
+          h('div', { className: 'qr-line' }, h('span', null, t.balance), h('b', null, reasons[official.status] ?? t.balanceLoading)),
+        ]
+      }
+      const symbol = official.currency === 'USD' ? '$' : '¥'
+      const money2 = (n) => `${symbol}${(Number(n) || 0).toFixed(2)}`
+      const day = official.day
+      const comparable = day && day.currency === official.currency && Number.isFinite(day.spend)
+      // Keep the row itself short: a long label plus a long value wrapped into a
+      // mess, so the qualifiers live in the note underneath.
+      const right = comparable
+        ? day.spend >= 0
+          ? `${t.balanceToday} ${money2(day.spend)}`
+          : t.balanceToppedUp
+        : t.balanceAccountScope
+      const note = comparable
+        ? `${t.scopeNote} · ${t.balanceSince(clockTime(day.firstAt))}`
+        : t.scopeNote
+      return [
+        h('div', { className: 'qr-line' }, h('span', null, t.balance), h('b', null, `${money2(official.total)} · ${right}`)),
+        h('div', { className: 'qr-note' }, note),
+      ]
     }
 
     // ---------------------------------------------------------------------

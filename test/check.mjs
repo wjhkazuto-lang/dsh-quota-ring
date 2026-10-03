@@ -366,6 +366,31 @@ check('the release metadata points at a real repository', () => {
   assert.ok(pkg.author, 'author is required for a published package')
 })
 
+check('the reload rules are documented as they actually behave', () => {
+  // Host-half modules are cached by Node inside the Electron main process, so a
+  // hot re-apply runs the OLD code; only a full restart reloads it. This was
+  // documented wrongly once, so it is pinned now.
+  const readme = fs.readFileSync(join(root, 'README.md'), 'utf8')
+  assert.ok(/必须完全重启 DSH 才会生效/.test(readme), 'the host restart rule must be stated')
+  assert.ok(/刷新页面/.test(readme), 'the client refresh rule must be stated')
+})
+
+check('network access is declared, and only for the balance read', () => {
+  // The balance reconciliation is the one network-backed path; declaring it
+  // keeps dshhub.permissions honest for anyone auditing the plugin.
+  const net = pkg.dshhub?.permissions?.network
+  assert.ok(Array.isArray(net), 'dshhub.permissions.network must be an array')
+  assert.deepEqual(net, ['https://platform.deepseek.com'], 'only the platform origin may be contacted')
+  assert.equal(pkg.dshhub.compatibility?.node, pkg.engines?.node, 'the declared node floor must agree')
+})
+
+check('the reconciliation switch exists and is documented', () => {
+  assert.equal(typeof pkg.dshhub, 'object', 'dshhub metadata is required')
+  const readme = fs.readFileSync(join(root, 'README.md'), 'utf8')
+  assert.ok(readme.includes('balanceReconcile'), 'the README must document the offline switch')
+  assert.ok(/账号级/.test(readme), 'the README must explain the account scope')
+})
+
 check('the LICENSE file exists and matches the declared license', () => {
   const file = join(root, 'LICENSE')
   assert.ok(fs.existsSync(file), 'LICENSE is missing')

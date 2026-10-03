@@ -43,6 +43,7 @@ DeepSeek Harness 的额度插件：**在输入框下方的状态行里常驻一�
 - **按官方人民币峰谷价目表计费**（见下），统计全机所有会话的消耗，含子代理。
 - **启动回填最近 35 天**，装完立刻能看到今天已经花了多少，不用等新请求。
 - **只提醒，不拦截**：超额只变色，不会阻止你继续发消息。
+- **官方余额对账**：并排显示账号级余额与本日变化，让本机口径和平台用量页的差额一目了然（可关闭，见「两种口径」）。
 
 ## 计费规则
 
@@ -111,13 +112,13 @@ dsh plugin --profile desktop remove dsh-quota-ring
 
 - **DSH** `>= 0.2.0-rc.1`（`dsh.bundle` / `dsh.client` 清单契约）
 - **Node** `>= 22.15`。DSH 把会话日志存成 zstd 压缩的 JSONL，逐帧解压依赖 Node 22.15+ / 24 的 `zlib.zstdDecompressSync`；低于这个版本插件仍能实时计费，但**启动回填会读不到历史**。
-- 无需任何 API Key，**不联网**。
+- 无需任何 API Key。**默认只在读取官方账户余额时联网**（走 DSH 自己的账号服务，插件本身不发 HTTP 请求）；把行配置里的 `balanceReconcile` 设为 `false` 即**完全不联网**。
 
 ## 配置
 
 **设置 → 额度**：只有日/周/月三个额度输入框。这里的值存在账本里，优先级高于行配置的默认值。
 
-**高级项**在插件行配置（`cordis.patch.yml` 的 `config`）里：`thresholds`、`peakEnabled`、`peakWindows`、`holidays`、`prices`、`backfillDays`、`retentionDays`、`refreshSeconds`。改完需要重新安装并重启（见下）。
+**高级项**在插件行配置（`cordis.patch.yml` 的 `config`）里：`thresholds`、`peakEnabled`、`peakWindows`、`holidays`、`prices`、`backfillDays`、`retentionDays`、`balanceReconcile`、`balanceRefreshMinutes`、`refreshSeconds`。改完需要重新安装并重启（见下）。
 
 ## 年度维护：节假日表
 
@@ -146,12 +147,37 @@ DSH 有**两个**都叫「插件」的地方，容易混：
 
 `test/check.mjs` 有一组断言专门盯这份契约（图标可解析且够小、locale 形状正确、en.json 存在、exports 齐全、`files` 里带上资源、标题保留包名以便搜索），因为这些都很容易在后续改动中被无声破坏。
 
+## 两种口径：本机 vs 账号
+
+这是最容易困惑的地方，所以插件把两个数字**并排显示**而不是只显示一个。
+
+| 口径 | 含义 | 谁提供 |
+|---|---|---|
+| **本机** | 这台机器上 DSH 的**全部会话**（含子代理）的消耗，按官方价目表换算 | 插件自己统计 |
+| **账号级** | DeepSeek 平台账户的余额变化，**含所有设备、所有工具** | `deepseekAccount` 服务 |
+
+两者**永远不会相等**，因为账号级还会包含：
+
+- 你在别的设备/工具上用同一个账号的消耗
+- DSH **没有记录 usage** 的计费调用 —— 会话标题生成（`session/title-llm-request`）与联网搜索的模型调用（`web/deepseek-search-llm-request`）。实测这两类很便宜（约 ¥0.01–0.04/天），但确实存在，任何基于会话日志的统计（包括 dsh-cost-meter）都看不到它们。
+
+悬停面板里会显示成这样：
+
+```
+官方余额 · 账号级        ¥12.34 · 本日减少 ¥0.13 · 自 09:12
+额度按本机 DSH 会话计；官方余额是账号级，含其他设备与工具。
+```
+
+**「自 HH:MM」而不是「本日」**：基线是当天**第一次成功读到余额**的时刻，不一定在本地午夜（除非那时 DSH 正好开着）。所以显示具体时刻，不假装覆盖全天。当天有充值时会显示「本日有充值」而不是把负的差值当成消费。
+
+要对得上官方用量页，请以账号级为准；本机数字用来看「我今天在这台机器上花了多少」。
+
 ## 数据
 
 - 账本：`$DSH_HOME/storages/quota-ring/ledger.json`
 - 账本里存的是**按档位与模型拆分的 token**，不是金额。所以改价目表会**重算全部历史**，而不是留下过期的旧金额。
 - 只读会话日志（`$DSH_HOME/sessions/`）用于启动回填，不写、不改。
-- 不联网，不做任何网络请求，无遥测。
+- 无遥测。唯一的联网行为是读取官方账户余额（见下），可用 `balanceReconcile: false` 关掉。
 
 ## 结构
 
@@ -161,9 +187,9 @@ cordis.patch.yml     插入 quota-ring 这一行 Loader 条目 + 全部高级配
 lib/quota.mjs        纯逻辑：价目表、峰谷判定、额度周期、计费与额度评估
 lib/index.js         Host 半边：回填会话日志、订阅 session/event、账本落盘、两条路由
 client.js            Client 半边：状态行芯片 + 设置页（手写 plain JS，无构建步骤）
-test/check.mjs       35 项纯逻辑自检（含显示元信息与发布元信息契约）
-test/smoke.mjs       27 项 Host 端到端自检（模拟 Cordis ctx 真正启动插件）
-test/render-check.mjs 35 项 Client 渲染自检（最小 React 运行时跑真实组件）
+test/check.mjs       38 项纯逻辑自检（含显示/发布元信息与文档契约）
+test/smoke.mjs       33 项 Host 端到端自检（模拟 Cordis ctx 真正启动插件）
+test/render-check.mjs 42 项 Client 渲染自检（最小 React 运行时跑真实组件）
 test/preview.mjs     把真实组件渲染成 test/preview.html 供肉眼查看
 ```
 
@@ -175,7 +201,7 @@ Host 与浏览器之间只有两条同源 JSON 路由：
 ## 自检
 
 ```bash
-npm test          # 三套一起跑，共 97 项断言
+npm test          # 三套一起跑，共 113 项断言
 npm run check     # 两个半边的语法校验
 npm run preview   # 生成 test/preview.html
 ```
@@ -186,8 +212,10 @@ npm run preview   # 生成 test/preview.html
 
 ## 已知说明
 
-- **profile 里存的是硬链接副本**（与源码同 inode，链接数 2）。因此：**原地写入**（如 `python3 - <<PY` 重写文件）会立刻反映到已装副本，不必重装；但**替换文件的编辑器/工具**（`write`/`edit` 这类先写临时文件再 rename 的）会切断硬链接，使已装副本变旧，此时需要 remove + add 重新链接（直接重复 add 会报 `ambiguous-install`）。判断方法：比 inode（`stat -f '%i'`）而不是只比哈希。
-- **安装即热生效，且热重载现在是安全的**。实测 remove 后路由立即释放（`GET /__quota-ring/state` 变 404），随后 install 返回 `application: applied`、无 `duplicate exact route` 错误 —— 也就是说 `ctx.effect` 修复之后，改完插件可以**原地热重载，不需要重启 DSH**。只有页面需要刷新一次以重新领取客户端 bundle。
+- **profile 里存的是硬链接副本**（与源码同 inode，链接数 2）。因此**原地写入**（如 `python3 - <<PY` 重写）会立刻反映到已装副本；而先写临时文件再 rename 的工具会切断硬链接，使已装副本变旧，此时需要 remove + add 重新链接。因此：**原地写入**（如 `python3 - <<PY` 重写文件）会立刻反映到已装副本，不必重装；但**替换文件的编辑器/工具**（`write`/`edit` 这类先写临时文件再 rename 的）会切断硬链接，使已装副本变旧，此时需要 remove + add 重新链接（直接重复 add 会报 `ambiguous-install`）。判断方法：比 inode（`stat -f '%i'`）而不是只比哈希。
+- **宿主半边的改动必须完全重启 DSH 才会生效**。这条踩过坑：热重载会重新挂载 fiber（日志、账本都动起来了），但 Electron 主进程的 **Node ESM 模块缓存**仍然命中进程内**最早导入的那份 `lib/index.js`**，磁盘上的新代码不会被执行。判断方法：对着 `GET /__quota-ring/state` 看 `meta` 的键是否符合新代码 —— 如果不符合，就是缓存，需要 ⌘Q 重启。
+  - **客户端半边相反**：浏览器按 `/plugins/??<id>/client.js&rev=<hash>` 走 HTTP 取 bundle，`rev` 是文件 stat 的哈希，所以改完 `client.js` 只需**刷新页面**。
+  - 所以开发时的循环是：改 `client.js` → 刷新页面；改 `lib/*.js` → ⌘Q 重启。
 - **客户端半边必须声明依赖**（v0.1.0 已修）。这是最难查的一个坑：**重启后整个界面半边消失，热安装却正常**，看起来像随机。根因是 `client.js` 里那段 `const slots = ctx.get('slots'); if (!slots) return` —— 冷启动时客户端的 bundle 可能**先于 `slots` 服务**执行，`apply()` 于是直接提前返回，**两个席位一个都没注册**（注意：是"两个都没"，不是只丢一个，这正是提前返回的指纹）。热安装时页面早已启动完毕，`slots` 一定存在，所以完全正常。修法有两层，缺一不可：
   - 插件对象声明 `inject: ['slots']` —— 让 Cordis **等服务就绪再调用 apply**，而不是靠运气；
   - `package.json` 的 `dsh.client.inject` 列出 `@deepseek-ai/dsh-client-ui-slots` 等包 —— 让客户端模块图**把你排在提供这些服务的包之后**。
@@ -202,7 +230,7 @@ npm run preview   # 生成 test/preview.html
 ```bash
 npm install        # 只装一个 devDependency：yaml（用于读取 cordis.patch.yml）
 npm run check      # 两个半边的语法校验
-npm test           # 三套一起跑，共 97 项断言
+npm test           # 三套一起跑，共 113 项断言
 npm run preview    # 渲染 test/preview.html
 ```
 

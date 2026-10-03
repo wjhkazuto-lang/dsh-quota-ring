@@ -158,6 +158,10 @@ const state = {
     cacheHitRate: 0.989,
   },
   phase: { peak: false, reason: 'holiday', windows: [{ start: 1, end: 4 }, { start: 6, end: 10 }] },
+  official: {
+    status: 'ready', at: now, currency: 'CNY', recharge: 9.21, granted: 3.13, total: 12.34, reconcile: true,
+    day: { date: '2026-10-04', currency: 'CNY', firstTotal: 12.47, firstAt: now - 3 * 3600_000, lastTotal: 12.34, lastAt: now, spend: 0.13 },
+  },
   meta: {
     currency: 'CNY',
     symbol: '¥',

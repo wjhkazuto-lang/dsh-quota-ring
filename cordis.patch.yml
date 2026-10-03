@@ -41,6 +41,14 @@
 #   retentionDays
 #       How long per-day buckets are kept before pruning.
 #
+#   balanceReconcile / balanceRefreshMinutes
+#       Whether to read the OFFICIAL account balance, so the panel can show the
+#       machine-scope spend next to the account-scope one. This is the only thing
+#       in the plugin that reaches the network (it goes through DSH's own account
+#       service, never a direct HTTP call), so `balanceReconcile: false` restores
+#       a completely offline plugin. Refresh is deliberately slow: the platform
+#       balance is not a per-second number.
+#
 #   refreshSeconds
 #       How often the browser half re-reads the Host state.
 
@@ -114,4 +122,6 @@
             offPeak: { cacheHit: 0.02, cacheMiss: 1, output: 4 }
         backfillDays: 35
         retentionDays: 400
+        balanceReconcile: true
+        balanceRefreshMinutes: 5
         refreshSeconds: 30

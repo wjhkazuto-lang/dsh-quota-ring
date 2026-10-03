@@ -275,6 +275,10 @@ function fixtureState(overrides = {}) {
     },
     today: { cost: 1.82, tokens: { inMiss: 20000, cacheHit: 1_200_000, output: 40000 }, totalTokens: 1_260_000, cacheHitRate: 0.9643 },
     phase: { peak: false, reason: 'holiday', windows: [{ start: 1, end: 4 }] },
+    official: {
+      status: 'ready', at: Date.now(), currency: 'CNY', recharge: 10.34, granted: 2, total: 12.34, reconcile: true,
+      day: { date: '2026-10-04', currency: 'CNY', firstTotal: 12.47, firstAt: Date.now() - 3 * 3600_000, lastTotal: 12.34, lastAt: Date.now(), spend: 0.13 },
+    },
     meta: {
       currency: 'CNY', symbol: '¥', thresholds: { warn: 0.6, danger: 0.9 },
       ledgerUpdatedAt: Date.now(), holidayYears: ['2026'], holidayTableMiss: false,
@@ -465,6 +469,73 @@ check('the badge renders a loading state before the first state arrives', () => 
 check('the badge explains an unreachable host instead of rendering nothing', () => {
   const body = text(renderComponent(badge, { store: makeStore(null, { status: 'error' }) }))
   assert.ok(body.includes('需重启'), `expected restart hint, got ${body}`)
+})
+
+check('the panel reconciles machine-scope spend against the official balance', () => {
+  const body = text(renderComponent(badge, { store: makeStore(fixtureState()) }))
+  assert.ok(body.includes('官方余额'), `missing balance row, got ${body}`)
+  assert.ok(body.includes('账号级'), 'the balance row must state that it is account-scoped')
+  assert.ok(body.includes('¥12.34'), `missing balance total, got ${body}`)
+  assert.ok(body.includes('本日减少 ¥0.13'), `missing today decrease, got ${body}`)
+})
+
+check('the reconciliation row says when the day baseline started', () => {
+  // The baseline is the first reading of the day, NOT necessarily midnight, so
+  // the time is shown instead of implying a full-day figure.
+  const tree = renderComponent(badge, { store: makeStore(fixtureState()) })
+  // Must match the client's own options exactly, including the 24-hour clock.
+  const clock = new Date(fixtureState().official.day.firstAt).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  assert.ok(text(tree).includes(`自 ${clock}`), `expected a baseline time of ${clock}`)
+})
+
+check('the scope difference is stated, not left for the user to guess', () => {
+  const body = text(renderComponent(badge, { store: makeStore(fixtureState()) }))
+  assert.ok(body.includes('本机'), `expected a scope note, got ${body}`)
+  assert.ok(body.includes('账号级'), 'the note must name the account scope')
+})
+
+check('a top-up is not reported as a spend', () => {
+  const state = fixtureState()
+  state.official.day = { ...state.official.day, firstTotal: 10, lastTotal: 22.5, spend: -12.5 }
+  const body = text(renderComponent(badge, { store: makeStore(state) }))
+  assert.ok(body.includes('本日有充值'), `expected a top-up label, got ${body}`)
+  assert.ok(!body.includes('本日减少'), 'a top-up must not read as a spend')
+})
+
+check('every non-ready balance state explains itself instead of going blank', () => {
+  const cases = [
+    [{ reconcile: false }, '关闭对账'],
+    [{ status: 'loading' }, '读取中'],
+    [{ status: 'signed-out' }, '未登录'],
+    [{ status: 'unavailable' }, '账号服务不可用'],
+    [{ status: 'failed' }, '余额查询失败'],
+  ]
+  for (const [override, needle] of cases) {
+    const state = fixtureState()
+    state.official = { ...state.official, ...override }
+    const body = text(renderComponent(badge, { store: makeStore(state) }))
+    assert.ok(body.includes(needle), `state ${JSON.stringify(override)} should say "${needle}", got ${body}`)
+  }
+})
+
+check('a USD wallet is not rendered with a ¥ sign', () => {
+  const state = fixtureState()
+  state.official = { ...state.official, currency: 'USD', total: 3.5, day: { ...state.official.day, currency: 'USD', spend: 0.5 } }
+  const body = text(renderComponent(badge, { store: makeStore(state) }))
+  assert.ok(body.includes('$3.50'), `expected a USD total, got ${body}`)
+  assert.ok(!body.includes('¥3.50'), 'a USD wallet must not use the yuan sign')
+})
+
+check('an absent official slice degrades to the disabled row', () => {
+  const state = fixtureState()
+  delete state.official
+  assert.doesNotThrow(() => renderComponent(badge, { store: makeStore(state) }))
+  const body = text(renderComponent(badge, { store: makeStore(state) }))
+  assert.ok(body.includes('官方余额'), 'the row should still render')
 })
 
 check('the English locale switches the copy', () => {

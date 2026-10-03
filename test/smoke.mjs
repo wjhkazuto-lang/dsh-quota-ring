@@ -429,7 +429,7 @@ await check('a zero-usage event does not inflate the call count', async () => {
 // machine cannot exercise yet — subagent usage, and the missing-holiday-year
 // warning — get real coverage.
 // ---------------------------------------------------------------------------
-function boot({ dir, config: override }) {
+function boot({ dir, config: override, account, accountCalls }) {
   process.env.DSH_HOME = dir
   const bootRoutes = new Map()
   const bootListeners = new Map()
@@ -442,7 +442,11 @@ function boot({ dir, config: override }) {
       if (typeof cleanup === 'function') bootCleanups.push(cleanup)
       return () => {}
     },
-    get: () => undefined,
+    get: (name) => {
+      if (name !== 'deepseekAccount') return undefined
+      if (accountCalls) accountCalls.n += 1
+      return account
+    },
   }
   const lines = []
   const realLog = console.log
@@ -698,6 +702,145 @@ await check('a hot re-apply succeeds after a clean dispose (no duplicate route)'
     assert.equal((await second.state()).periods.day.used, 1)
     second.dispose()
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Official-balance reconciliation. The plugin counts THIS machine's sessions
+// while the platform's usage page is account-scoped, so the two can never be
+// equal; these tests pin how the difference is read and reported.
+// ---------------------------------------------------------------------------
+/** A fake `deepseekAccount` with the documented getState/getBalance contract. */
+function fakeAccount({ signedIn = true, wallets = { CNY: 12.34 }, granted = 0, balanceThrows = false } = {}) {
+  return {
+    async getState() {
+      return { status: signedIn ? 'credential-stored' : 'signed-out', links: { usageUrl: 'https://platform.deepseek.com/usage' }, attempt: null }
+    },
+    async getBalance() {
+      if (balanceThrows) throw new Error('network down')
+      return {
+        status: 'ready',
+        value: Object.entries(wallets).map(([currency, balance]) => ({ currency, balance: String(balance) })),
+        bonusWallets: granted > 0 ? [{ currency: 'CNY', balance: String(granted) }] : [],
+      }
+    },
+  }
+}
+
+async function seedLedger(dir, balance) {
+  fs.mkdirSync(path.join(dir, 'storages', 'quota-ring'), { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'storages', 'quota-ring', 'ledger.json'),
+    JSON.stringify({ version: 1, updatedAt: 0, limits: { dayLimit: 10, weekLimit: 50, monthLimit: 200 }, days: {}, sessions: {}, balance }),
+  )
+}
+
+async function bootWithAccount({ balanceSeed, ...opts }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-ring-bal-'))
+  if (balanceSeed !== undefined) await seedLedger(dir, balanceSeed)
+  const run = boot({ dir, ...opts })
+  await run.ready()
+  // The balance read is async and fire-and-forget; give it a moment to land.
+  for (let i = 0; i < 40; i += 1) {
+    const st = await run.state()
+    if (st.official?.status !== 'loading') return { run, dir, state: st }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  return { run, dir, state: await run.state() }
+}
+
+await check('the balance read is summed from the account wallets', async () => {
+  const { run, dir, state } = await bootWithAccount({ account: fakeAccount({ wallets: { CNY: 10.34 }, granted: 2 }) })
+  try {
+    assert.equal(state.official.status, 'ready')
+    assert.equal(state.official.currency, 'CNY')
+    assert.equal(state.official.granted, 2)
+    assert.ok(Math.abs(state.official.total - 12.34) < 1e-9, `total ${state.official.total}`)
+  } finally {
+    run.dispose()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('the daily baseline turns two readings into an account-scope spend', async () => {
+  // Seed today's baseline as if the plugin had read 12.47 earlier today, then
+  // let the startup read observe 12.34.
+  const today = new Date()
+  const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const firstAt = Date.now() - 3 * 3600_000
+  const { run, dir, state } = await bootWithAccount({
+    account: fakeAccount({ wallets: { CNY: 12.34 } }),
+    balanceSeed: { date: key, currency: 'CNY', firstTotal: 12.47, firstAt, lastTotal: 12.47, lastAt: firstAt },
+  })
+  try {
+    assert.equal(state.official.status, 'ready')
+    assert.ok(Math.abs(state.official.day.spend - 0.13) < 1e-9, `spend ${state.official.day.spend}`)
+    assert.equal(state.official.day.firstAt, firstAt, 'the baseline start must be preserved')
+  } finally {
+    run.dispose()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('a stale baseline from a previous day is reset, not carried over', async () => {
+  const { run, dir, state } = await bootWithAccount({
+    account: fakeAccount({ wallets: { CNY: 12.34 } }),
+    balanceSeed: { date: '2020-01-01', currency: 'CNY', firstTotal: 99, firstAt: 1, lastTotal: 99, lastAt: 1 },
+  })
+  try {
+    assert.ok(Math.abs(state.official.day.spend) < 1e-9, `a fresh day must start at zero spend, got ${state.official.day.spend}`)
+    assert.ok(Math.abs(state.official.day.firstTotal - 12.34) < 1e-9, 'the baseline must be today\'s first reading')
+  } finally {
+    run.dispose()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('a top-up produces a negative delta the UI can label', async () => {
+  const key = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
+  const { run, dir, state } = await bootWithAccount({
+    account: fakeAccount({ wallets: { CNY: 50 } }),
+    balanceSeed: { date: key, currency: 'CNY', firstTotal: 10, firstAt: Date.now() - 1000, lastTotal: 10, lastAt: Date.now() - 1000 },
+  })
+  try {
+    assert.ok(state.official.day.spend < 0, `a top-up must read negative, got ${state.official.day.spend}`)
+  } finally {
+    run.dispose()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('signed-out, missing service and a throwing query each report why', async () => {
+  const cases = [
+    [{ account: fakeAccount({ signedIn: false }) }, 'signed-out'],
+    [{ account: undefined }, 'unavailable'],
+    [{ account: fakeAccount({ balanceThrows: true }) }, 'failed'],
+  ]
+  for (const [opts, expected] of cases) {
+    const { run, dir, state } = await bootWithAccount(opts)
+    try {
+      assert.equal(state.official.status, expected, `${JSON.stringify(expected)} expected, got ${state.official.status}`)
+    } finally {
+      run.dispose()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+})
+
+await check('balanceReconcile:false never touches the account service', async () => {
+  const accountCalls = { n: 0 }
+  const { run, dir, state } = await bootWithAccount({
+    account: fakeAccount(),
+    accountCalls,
+    config: { ...effective, balanceReconcile: false },
+  })
+  try {
+    assert.equal(state.official.status, 'disabled')
+    assert.equal(state.official.reconcile, false)
+    assert.equal(accountCalls.n, 0, 'the account service must not be consulted when reconciliation is off')
+  } finally {
+    run.dispose()
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
