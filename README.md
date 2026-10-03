@@ -168,6 +168,8 @@ DSH 有**两个**都叫「插件」的地方，容易混：
 额度按本机 DSH 会话计；官方余额是账号级，含其他设备与工具。
 ```
 
+**为什么用 `ctx.inject` 而不是 `ctx.get`**：`deepseekAccount` 是 profile 树里的**兄弟行**，而服务查找只沿**祖先链**走 —— 所以从本插件自己的上下文 `ctx.get('deepseekAccount')` 拿到的是 `undefined`（实测面板就报了这个）。用 `ctx.inject(['deepseekAccount'], cb)` 挂一个**子 fiber**：服务就绪时回调才运行，服务不存在时它干脆不运行，**不会像硬 `inject` 那样把整个插件卡住不激活** —— 后者在非桌面（web）profile 上会让额度环彻底消失，代价远大于一个余额行。
+
 **读到失败不会只显示一句「不可用」**：宿主会把原因原样带上来（服务不存在 / 未登录 / 查询抛错并注明重试次数），因为「服务缺失」「未登录」「平台查询失败」长得一样的话，下次排查等于从零开始。余额查询打的是 `platform.deepseek.com`，该域名在开了 HTTPS 解密的机器上会**间歇性** TLS 失败，所以读到失败会重试 3 次；仍失败时，后续每次状态请求（间隔超过 `balanceRetrySeconds`，默认 30 秒）都会再试一次，自愈而不是等满一个刷新周期。
 
 **「自 HH:MM」而不是「本日」**：基线是当天**第一次成功读到余额**的时刻，不一定在本地午夜（除非那时 DSH 正好开着）。所以显示具体时刻，不假装覆盖全天。当天有充值时会显示「本日有充值」而不是把负的差值当成消费。
@@ -190,7 +192,7 @@ lib/quota.mjs        纯逻辑：价目表、峰谷判定、额度周期、计�
 lib/index.js         Host 半边：回填会话日志、订阅 session/event、账本落盘、两条路由
 client.js            Client 半边：状态行芯片 + 设置页（手写 plain JS，无构建步骤）
 test/check.mjs       38 项纯逻辑自检（含显示/发布元信息与文档契约）
-test/smoke.mjs       35 项 Host 端到端自检（模拟 Cordis ctx 真正启动插件）
+test/smoke.mjs       36 项 Host 端到端自检（模拟 Cordis ctx 真正启动插件）
 test/render-check.mjs 44 项 Client 渲染自检（最小 React 运行时跑真实组件）
 test/preview.mjs     把真实组件渲染成 test/preview.html 供肉眼查看
 ```
@@ -203,7 +205,7 @@ Host 与浏览器之间只有两条同源 JSON 路由：
 ## 自检
 
 ```bash
-npm test          # 三套一起跑，共 117 项断言
+npm test          # 三套一起跑，共 118 项断言
 npm run check     # 两个半边的语法校验
 npm run preview   # 生成 test/preview.html
 ```
@@ -232,7 +234,7 @@ npm run preview   # 生成 test/preview.html
 ```bash
 npm install        # 只装一个 devDependency：yaml（用于读取 cordis.patch.yml）
 npm run check      # 两个半边的语法校验
-npm test           # 三套一起跑，共 117 项断言
+npm test           # 三套一起跑，共 118 项断言
 npm run preview    # 渲染 test/preview.html
 ```
 

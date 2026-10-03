@@ -113,8 +113,21 @@ const ctx = {
     if (typeof cleanup === 'function') effectCleanups.push(cleanup)
     return () => {}
   },
-  get: () => undefined,
+  // Model the real isolation: the account row is a SIBLING, so a plain lookup
+  // from this plugin's context returns undefined. Only the deferred injection
+  // can reach it. (This is what the live plugin reported before the fix.)
+  get: (name) => (name === 'deepseekAccount' ? undefined : undefined),
+  inject: (deps, callback) => {
+    const child = {
+      get: (name) => (name === 'deepseekAccount' ? mainAccount : undefined),
+      deepseekAccount: undefined,
+      effect: () => () => {},
+    }
+    if (Array.isArray(deps) && deps.includes('deepseekAccount') && mainAccount) callback(child)
+    return () => {}
+  },
 }
+let mainAccount = null
 
 function disposeAll(cleanups) {
   for (const cleanup of [...cleanups].reverse()) {
@@ -442,10 +455,18 @@ function boot({ dir, config: override, account, accountCalls }) {
       if (typeof cleanup === 'function') bootCleanups.push(cleanup)
       return () => {}
     },
-    get: (name) => {
-      if (name !== 'deepseekAccount') return undefined
+    // Sibling isolation: a direct lookup must NOT see the service.
+    get: () => undefined,
+    inject: (deps, callback) => {
+      if (!Array.isArray(deps) || !deps.includes('deepseekAccount')) return () => {}
       if (accountCalls) accountCalls.n += 1
-      return account
+      // The injected child context is where the service becomes reachable.
+      callback({
+        get: (name) => (name === 'deepseekAccount' ? account : undefined),
+        deepseekAccount: undefined,
+        effect: () => () => {},
+      })
+      return () => {}
     },
   }
   const lines = []
@@ -750,6 +771,21 @@ async function bootWithAccount({ balanceSeed, ...opts }) {
   return { run, dir, state: await run.state() }
 }
 
+await check('the account service is reached through the injection, not a sibling lookup', async () => {
+  // Regression: the live plugin reported "账号服务不可用" after a restart because a
+  // plain ctx.get cannot see a SIBLING row's service. The harness models exactly
+  // that (ctx.get returns undefined; only ctx.inject's child context has it), so
+  // this test fails if the fix is ever reverted to a direct lookup.
+  const { run, dir, state } = await bootWithAccount({ account: fakeAccount({ wallets: { CNY: 5 } }) })
+  try {
+    assert.equal(state.official.status, 'ready', `expected a reachable service, got ${state.official.status}: ${state.official.error}`)
+    assert.ok(Math.abs(state.official.total - 5) < 1e-9)
+  } finally {
+    run.dispose()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 await check('the balance read is summed from the account wallets', async () => {
   const { run, dir, state } = await bootWithAccount({ account: fakeAccount({ wallets: { CNY: 10.34 }, granted: 2 }) })
   try {
@@ -814,7 +850,7 @@ await check('a top-up produces a negative delta the UI can label', async () => {
 await check('signed-out, missing service and a throwing query each report why', async () => {
   const cases = [
     [{ account: fakeAccount({ signedIn: false }) }, 'signed-out', null],
-    [{ account: undefined }, 'unavailable', '没有 deepseekAccount'],
+    [{ account: undefined }, 'unavailable', '尚未拿到 deepseekAccount'],
     [{ account: fakeAccount({ balanceThrows: true }) }, 'failed', '已重试 3 次'],
   ]
   for (const [opts, expected, reasonNeedle] of cases) {
@@ -902,7 +938,7 @@ await check('a non-ready read is retried on the next state request', async () =>
   }
 })
 
-await check('balanceReconcile:false never touches the account service', async () => {
+await check('balanceReconcile:false never asks for the account service', async () => {
   const accountCalls = { n: 0 }
   const { run, dir, state } = await bootWithAccount({
     account: fakeAccount(),
@@ -912,7 +948,7 @@ await check('balanceReconcile:false never touches the account service', async ()
   try {
     assert.equal(state.official.status, 'disabled')
     assert.equal(state.official.reconcile, false)
-    assert.equal(accountCalls.n, 0, 'the account service must not be consulted when reconciliation is off')
+    assert.equal(accountCalls.n, 0, 'the injection must not even be requested when reconciliation is off')
   } finally {
     run.dispose()
     fs.rmSync(dir, { recursive: true, force: true })
