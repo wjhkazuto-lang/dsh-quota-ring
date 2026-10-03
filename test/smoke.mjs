@@ -442,7 +442,7 @@ await check('a zero-usage event does not inflate the call count', async () => {
 // machine cannot exercise yet — subagent usage, and the missing-holiday-year
 // warning — get real coverage.
 // ---------------------------------------------------------------------------
-function boot({ dir, config: override, account, accountCalls }) {
+function boot({ dir, config: override, account, accountCalls, directOnly = false }) {
   process.env.DSH_HOME = dir
   const bootRoutes = new Map()
   const bootListeners = new Map()
@@ -455,12 +455,14 @@ function boot({ dir, config: override, account, accountCalls }) {
       if (typeof cleanup === 'function') bootCleanups.push(cleanup)
       return () => {}
     },
-    // Sibling isolation: a direct lookup must NOT see the service.
-    get: () => undefined,
+    // `directOnly` models the state after the account row has registered: the
+    // direct lookup answers and the injection never fires. The default models the
+    // startup race: the direct lookup misses and only the injection answers.
+    get: (name) => (directOnly && name === 'deepseekAccount' ? account : undefined),
     inject: (deps, callback) => {
       if (!Array.isArray(deps) || !deps.includes('deepseekAccount')) return () => {}
+      if (directOnly) return () => {}
       if (accountCalls) accountCalls.n += 1
-      // The injected child context is where the service becomes reachable.
       callback({
         get: (name) => (name === 'deepseekAccount' ? account : undefined),
         deepseekAccount: undefined,
@@ -771,15 +773,27 @@ async function bootWithAccount({ balanceSeed, ...opts }) {
   return { run, dir, state: await run.state() }
 }
 
-await check('the account service is reached through the injection, not a sibling lookup', async () => {
-  // Regression: the live plugin reported "账号服务不可用" after a restart because a
-  // plain ctx.get cannot see a SIBLING row's service. The harness models exactly
-  // that (ctx.get returns undefined; only ctx.inject's child context has it), so
-  // this test fails if the fix is ever reverted to a direct lookup.
+await check('the balance still reads when only the injection can reach the service', async () => {
+  // Models the real startup race: this read runs before the account row has
+  // registered, so the direct lookup misses. The injected child fiber is what
+  // saves it -- reverting to a direct lookup alone would break this.
   const { run, dir, state } = await bootWithAccount({ account: fakeAccount({ wallets: { CNY: 5 } }) })
   try {
     assert.equal(state.official.status, 'ready', `expected a reachable service, got ${state.official.status}: ${state.official.error}`)
     assert.ok(Math.abs(state.official.total - 5) < 1e-9)
+  } finally {
+    run.dispose()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await check('the balance also reads when only the direct lookup can reach the service', async () => {
+  // The mirror case (post-registration). Keeping BOTH mechanisms is the point:
+  // relying on either alone turns a transient miss into a dead feature.
+  const { run, dir, state } = await bootWithAccount({ account: fakeAccount({ wallets: { CNY: 8 } }), directOnly: true })
+  try {
+    assert.equal(state.official.status, 'ready', `expected a reachable service, got ${state.official.status}: ${state.official.error}`)
+    assert.ok(Math.abs(state.official.total - 8) < 1e-9)
   } finally {
     run.dispose()
     fs.rmSync(dir, { recursive: true, force: true })
@@ -850,11 +864,23 @@ await check('a top-up produces a negative delta the UI can label', async () => {
 await check('signed-out, missing service and a throwing query each report why', async () => {
   const cases = [
     [{ account: fakeAccount({ signedIn: false }) }, 'signed-out', null],
-    [{ account: undefined }, 'unavailable', '尚未拿到 deepseekAccount'],
+    [{ account: undefined }, 'unavailable', '始终未就绪'],
     [{ account: fakeAccount({ balanceThrows: true }) }, 'failed', '已重试 3 次'],
   ]
   for (const [opts, expected, reasonNeedle] of cases) {
-    const { run, dir, state } = await bootWithAccount(opts)
+    // The first pass deliberately stays on "loading" (a race is not an absence),
+    // so a missing service only becomes "unavailable" after a retry window.
+    const opts2 = expected === 'unavailable' ? { ...opts, config: { ...effective, balanceRetrySeconds: 1 } } : opts
+    const booted = await bootWithAccount(opts2)
+    const { run, dir } = booted
+    let state = booted.state
+    if (expected === 'unavailable') {
+      await new Promise((r) => setTimeout(r, 2400))
+      for (let i = 0; i < 30 && state.official.status === 'loading'; i += 1) {
+        await new Promise((r) => setTimeout(r, 150))
+        state = await run.state()
+      }
+    }
     try {
       assert.equal(state.official.status, expected, `${JSON.stringify(expected)} expected, got ${state.official.status}`)
       // The four failure modes must be distinguishable, not just "not ready".
