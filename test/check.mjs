@@ -208,9 +208,18 @@ check('sumDays aggregates tokens, calls and cost across days', () => {
 console.log('\nquota periods (local time, week starts Sunday)')
 // ---------------------------------------------------------------------------
 const LOCAL = (iso) => Date.parse(iso)
+/**
+ * An instant with the given LOCAL calendar fields, in any timezone.
+ *
+ * The period tests assert local calendar facts (which day the week starts on,
+ * which month the window ends in). Building those instants from a fixed `+08:00`
+ * offset only works where the machine's offset happens to match, so the tests
+ * pass on this machine and fail on CI (UTC) or for a contributor in the Americas.
+ */
+const atLocal = (y, m, d, hh = 12, mm = 0) => new Date(y, m - 1, d, hh, mm, 0, 0).getTime()
 
 check('day window is local midnight to the next local midnight', () => {
-  const at = LOCAL('2026-10-04T15:30:00+08:00')
+  const at = atLocal(2026, 10, 4, 15, 30)
   const start = dayStart(at)
   assert.equal(new Date(start).getHours(), 0)
   assert.equal(new Date(start).getDate(), 4)
@@ -220,11 +229,11 @@ check('day window is local midnight to the next local midnight', () => {
 })
 
 check('week window starts on Sunday', () => {
-  const sunday = LOCAL('2026-10-04T15:30:00+08:00') // a Sunday
+  const sunday = atLocal(2026, 10, 4, 15, 30) // a Sunday
   assert.equal(new Date(weekStart(sunday)).getDay(), 0)
   assert.equal(new Date(weekStart(sunday)).getDate(), 4)
 
-  const saturday = LOCAL('2026-10-10T09:00:00+08:00')
+  const saturday = atLocal(2026, 10, 10, 9)
   const start = new Date(weekStart(saturday))
   assert.equal(start.getDay(), 0, 'week containing a Saturday starts on Sunday')
   assert.equal(start.getDate(), 4)
@@ -235,7 +244,7 @@ check('week window starts on Sunday', () => {
 })
 
 check('month window starts on the 1st at local midnight', () => {
-  const at = LOCAL('2026-10-04T15:30:00+08:00')
+  const at = atLocal(2026, 10, 4, 15, 30)
   const start = new Date(monthStart(at))
   assert.equal(start.getDate(), 1)
   assert.equal(start.getMonth(), 9)
@@ -246,16 +255,25 @@ check('month window starts on the 1st at local midnight', () => {
 })
 
 check('month end handles a 31-day month across the year boundary', () => {
-  const at = LOCAL('2026-12-15T09:00:00+08:00')
+  const at = atLocal(2026, 12, 15, 9)
   const end = new Date(periodEnd(monthStart(at), 'month'))
   assert.equal(end.getFullYear(), 2027)
   assert.equal(end.getMonth(), 0)
   assert.equal(end.getDate(), 1)
 })
 
-check('local day keys use the local calendar day, not UTC', () => {
-  // 2026-10-04 07:00 Beijing is 2026-10-03 23:00 UTC; the window must still be the 4th.
-  assert.equal(localDayKey(LOCAL('2026-10-04T07:00:00+08:00')), '2026-10-04')
+check('a day rolls over at LOCAL midnight, not at UTC midnight', () => {
+  // Written timezone-independently on purpose: CI runs in UTC while this
+  // machine is UTC+8, so anything that hardcodes a local date only passes in one
+  // of them. Anchor to local noon and step across the local midnight instead.
+  const noon = new Date(atLocal(2026, 10, 4, 12))
+  const justBefore = new Date(noon)
+  justBefore.setHours(23, 59, 59, 999)
+  const atMidnight = new Date(justBefore.getTime() + 1)
+
+  assert.equal(localDayKey(justBefore.getTime()), localDayKey(noon.getTime()), 'same local day just before midnight')
+  assert.notEqual(localDayKey(atMidnight.getTime()), localDayKey(noon.getTime()), 'the day must roll over at local midnight')
+  assert.equal(new Date(atMidnight.getTime()).getHours(), 0, 'the rollover must be local midnight')
 })
 
 // ---------------------------------------------------------------------------
